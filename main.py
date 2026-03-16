@@ -9,8 +9,6 @@ from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
-from typing import Optional
 
 from ecl_engine import ECLEngine
 from pdf_report import generate_report
@@ -82,18 +80,16 @@ async def download(job_id: str):
     )
 
 
-class ReportRequest(BaseModel):
-    data: dict
-    company: Optional[str] = ""
-    prepared_by: Optional[str] = ""
-
-
 @app.post("/api/report")
-async def create_report(req: ReportRequest):
+async def create_report(request: Request):
+    body = await request.json()
+    data = body.get("data", {})
+    company = body.get("company", "")
+    prepared_by = body.get("prepared_by", "")
     job_id = str(uuid.uuid4())[:8]
     pdf_path = os.path.join(OUTPUTS_DIR, f"ECL_Report_{job_id}.pdf")
     try:
-        generate_report(req.data, pdf_path, req.company, req.prepared_by)
+        generate_report(data, pdf_path, company, prepared_by)
         return JSONResponse({"download_url": f"/api/report/{job_id}"})
     except Exception as e:
         import traceback
