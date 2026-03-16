@@ -9,8 +9,11 @@ from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+from typing import Optional
 
 from ecl_engine import ECLEngine
+from pdf_report import generate_report
 
 app = FastAPI(title="ECL Automation")
 
@@ -76,6 +79,37 @@ async def download(job_id: str):
         path,
         filename="ECL_Output.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+class ReportRequest(BaseModel):
+    data: dict
+    company: Optional[str] = ""
+    prepared_by: Optional[str] = ""
+
+
+@app.post("/api/report")
+async def create_report(req: ReportRequest):
+    job_id = str(uuid.uuid4())[:8]
+    pdf_path = os.path.join(OUTPUTS_DIR, f"ECL_Report_{job_id}.pdf")
+    try:
+        generate_report(req.data, pdf_path, req.company, req.prepared_by)
+        return JSONResponse({"download_url": f"/api/report/{job_id}"})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/report/{job_id}")
+async def download_report(job_id: str):
+    path = os.path.join(OUTPUTS_DIR, f"ECL_Report_{job_id}.pdf")
+    if not os.path.exists(path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return FileResponse(
+        path,
+        filename="ECL_Report.pdf",
+        media_type="application/pdf",
     )
 
 

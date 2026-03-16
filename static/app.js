@@ -575,3 +575,54 @@ function switchTab(tabId) {
 /* ── Export / Print ────────────────────────────────────────────────── */
 function printReport() { window.print(); }
 function downloadExcel() { if (downloadUrl) window.location.href = downloadUrl; }
+
+/* ── PDF Report Modal & Generation ────────────────────────────────── */
+function openReportModal() {
+    document.getElementById('report-modal').classList.add('active');
+    const status = document.getElementById('report-status');
+    status.style.display = 'none';
+    status.className = 'modal-status';
+}
+
+function closeReportModal() {
+    document.getElementById('report-modal').classList.remove('active');
+}
+
+async function generateReport() {
+    if (!DATA) return;
+    const btn = document.getElementById('btn-gen-report');
+    const status = document.getElementById('report-status');
+
+    btn.disabled = true;
+    btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> Generating...';
+    status.style.display = 'block';
+    status.className = 'modal-status loading';
+    status.textContent = 'Building charts and tables... This may take a few seconds.';
+
+    const company = document.getElementById('report-company').value.trim();
+    const prepared_by = document.getElementById('report-author').value.trim();
+
+    try {
+        const resp = await fetch('/api/report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: DATA, company, prepared_by }),
+        });
+        const json = await resp.json();
+        if (json.error) {
+            status.className = 'modal-status error';
+            status.textContent = 'Error: ' + json.error;
+            return;
+        }
+        status.className = 'modal-status success';
+        status.textContent = 'Report generated successfully! Downloading...';
+        setTimeout(() => { window.location.href = json.download_url; }, 400);
+        setTimeout(closeReportModal, 2000);
+    } catch (err) {
+        status.className = 'modal-status error';
+        status.textContent = 'Request failed: ' + err.message;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Generate Report';
+    }
+}
