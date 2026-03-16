@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECL Automation - Credit Risk Engine</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────── -->
+<header class="header">
+    <div class="header-content">
+        <div class="header-left">
+            <div class="header-icon">
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-9"/>
+                </svg>
+            </div>
+            <div>
+                <h1>ECL Automation</h1>
+                <p class="header-sub">Expected Credit Loss Computation Engine &middot; IFRS 9 / Ind AS 109</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <button class="dark-toggle" id="dark-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">
+                <svg id="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                    <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+                <svg id="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+</header>
+
+<!-- ── Progress Overlay ────────────────────────────────────────────── -->
+<div class="progress-overlay" id="progress-overlay">
+    <div class="progress-card">
+        <h2>Computing ECL</h2>
+        <p class="progress-sub">Processing your data through the risk engine...</p>
+        <div class="progress-steps">
+            <div class="pstep" id="pstep-1"><span class="pstep-dot"></span><span>Loading DPD data</span></div>
+            <div class="pstep" id="pstep-2"><span class="pstep-dot"></span><span>Computing transition matrices</span></div>
+            <div class="pstep" id="pstep-3"><span class="pstep-dot"></span><span>Computing ODR</span></div>
+            <div class="pstep" id="pstep-4"><span class="pstep-dot"></span><span>Computing TTC &amp; asset correlation</span></div>
+            <div class="pstep" id="pstep-5"><span class="pstep-dot"></span><span>Loading WEO macro data</span></div>
+            <div class="pstep" id="pstep-6"><span class="pstep-dot"></span><span>Computing Z-factor scenarios</span></div>
+            <div class="pstep" id="pstep-7"><span class="pstep-dot"></span><span>Computing Vasicek PD</span></div>
+            <div class="pstep" id="pstep-8"><span class="pstep-dot"></span><span>Generating Excel report</span></div>
+        </div>
+        <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progress-fill"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Main ─────────────────────────────────────────────────────────── -->
+<main class="container">
+
+    <!-- Upload Section -->
+    <section class="card" id="upload-section">
+        <h2 class="card-title">Upload Input Files</h2>
+        <div class="upload-grid">
+            <div class="upload-zone" id="dpd-zone" onclick="document.getElementById('dpd-file').click()">
+                <div class="upload-icon-wrap">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                </div>
+                <h3>DPD Data File</h3>
+                <p class="upload-hint">Loan-level Days Past Due history (.xlsx)</p>
+                <input type="file" id="dpd-file" accept=".xlsx,.xls" hidden>
+                <div class="file-badge" id="dpd-badge"></div>
+            </div>
+            <div class="upload-zone" id="weo-zone" onclick="document.getElementById('weo-file').click()">
+                <div class="upload-icon-wrap weo">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                </div>
+                <h3>WEO Data File</h3>
+                <p class="upload-hint">IMF World Economic Outlook data (.xlsx)</p>
+                <input type="file" id="weo-file" accept=".xlsx,.xls" hidden>
+                <div class="file-badge" id="weo-badge"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Configuration -->
+    <section class="card" id="config-section">
+        <div class="config-header" onclick="toggleConfig()">
+            <h2 class="card-title" style="margin:0">Configuration Parameters</h2>
+            <svg class="toggle-chevron" id="config-chevron" width="20" height="20" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="config-body" id="config-body">
+            <div class="config-grid">
+                <div class="config-item">
+                    <label for="shock">Scenario Shock (%)</label>
+                    <input type="number" id="shock" value="10" min="1" max="50" step="1">
+                    <span class="config-hint">Applied as +/- % of |Z|</span>
+                </div>
+                <div class="config-item">
+                    <label for="tm-start">TM Start Year</label>
+                    <input type="number" id="tm-start" value="2020" min="2015" max="2025">
+                    <span class="config-hint">First year for transition matrices</span>
+                </div>
+                <div class="config-item">
+                    <label for="hist-cutoff">Historical Cutoff</label>
+                    <input type="number" id="hist-cutoff" value="2024" min="2018" max="2026">
+                    <span class="config-hint">Last year of actual observed data</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Run Button -->
+    <div class="run-wrap">
+        <button class="btn-run" id="run-btn" onclick="runComputation()" disabled>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            <span id="run-text">Run ECL Computation</span>
+        </button>
+    </div>
+
+    <!-- Error display -->
+    <div class="error-box" id="error-box" style="display:none"></div>
+
+    <!-- Results Section -->
+    <section id="results-section" style="display:none">
+
+        <!-- Metric Cards -->
+        <div class="metrics-grid" id="metrics-grid"></div>
+
+        <!-- Tabs -->
+        <div class="card tabs-card">
+            <div class="tabs">
+                <button class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+                <button class="tab" data-tab="tm" onclick="switchTab('tm')">Transition Matrix</button>
+                <button class="tab" data-tab="odr" onclick="switchTab('odr')">ODR Analysis</button>
+                <button class="tab" data-tab="macro" onclick="switchTab('macro')">Macro &amp; Z-Factors</button>
+                <button class="tab" data-tab="pd" onclick="switchTab('pd')">PD Results</button>
+                <button class="tab" data-tab="sensitivity" onclick="switchTab('sensitivity')">Sensitivity</button>
+            </div>
+
+            <!-- Tab: Overview -->
+            <div class="tab-content active" id="tab-overview">
+                <div class="chart-row">
+                    <div class="chart-box">
+                        <h3>ODR Trend</h3>
+                        <canvas id="chart-odr-trend"></canvas>
+                    </div>
+                    <div class="chart-box">
+                        <h3>TTC PD by Grade</h3>
+                        <canvas id="chart-ttc"></canvas>
+                    </div>
+                </div>
+                <div class="chart-row" style="margin-top:20px">
+                    <div class="chart-box">
+                        <h3>Asset Correlation Curve (Basel II Retail IRB)</h3>
+                        <canvas id="chart-corr"></canvas>
+                    </div>
+                    <div class="chart-box">
+                        <h3>ODR Distribution</h3>
+                        <canvas id="chart-odr-hist"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Transition Matrix -->
+            <div class="tab-content" id="tab-tm">
+                <div class="tm-controls">
+                    <label for="tm-period-select">Select Period:</label>
+                    <select id="tm-period-select" onchange="renderTMTable()"></select>
+                </div>
+                <div class="table-wrap" id="tm-table-wrap"></div>
+                <div class="chart-row" style="margin-top:20px">
+                    <div class="chart-box full">
+                        <h3>Transition Heatmap</h3>
+                        <canvas id="chart-tm-heat"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: ODR -->
+            <div class="tab-content" id="tab-odr">
+                <h3>Observed Default Rates by Period</h3>
+                <div class="table-wrap" id="odr-table-wrap"></div>
+                <h3 style="margin-top:24px">ODR by Grade Heatmap</h3>
+                <div class="table-wrap" id="odr-grade-table-wrap"></div>
+            </div>
+
+            <!-- Tab: Macro -->
+            <div class="tab-content" id="tab-macro">
+                <h3>MAV Parameters (LTM &amp; SD)</h3>
+                <div class="table-wrap" id="mav-table-wrap"></div>
+                <div class="chart-row" style="margin-top:24px">
+                    <div class="chart-box full">
+                        <h3>GDP Z-Factor Scenario Fan Chart</h3>
+                        <canvas id="chart-fan"></canvas>
+                    </div>
+                </div>
+                <div class="chart-row" style="margin-top:20px">
+                    <div class="chart-box full">
+                        <h3>All MEV Z-Factors</h3>
+                        <canvas id="chart-zfactors"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: PD Results -->
+            <div class="tab-content" id="tab-pd">
+                <div class="scenario-selector">
+                    <label>Scenario:</label>
+                    <button class="scen-btn active" data-scen="Base" onclick="selectScenario('Base')">Base</button>
+                    <button class="scen-btn" data-scen="Upturn" onclick="selectScenario('Upturn')">Upturn</button>
+                    <button class="scen-btn" data-scen="Downturn" onclick="selectScenario('Downturn')">Downturn</button>
+                </div>
+                <div class="table-wrap" id="pd-table-wrap"></div>
+                <div class="chart-row" style="margin-top:24px">
+                    <div class="chart-box full">
+                        <h3>Vasicek PD Forecast</h3>
+                        <canvas id="chart-pd"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Sensitivity -->
+            <div class="tab-content" id="tab-sensitivity">
+                <div class="sensitivity-panel">
+                    <div class="sens-controls">
+                        <h3>Real-Time Sensitivity Analysis</h3>
+                        <p class="sens-hint">Adjust the shock factor and see PD changes instantly. No re-upload needed.</p>
+                        <div class="sens-slider-group">
+                            <label for="sens-shock">Shock Factor: <strong id="sens-shock-val">10%</strong></label>
+                            <input type="range" id="sens-shock" min="0" max="50" step="1" value="10" oninput="onSensitivityChange()">
+                            <div class="slider-labels"><span>0%</span><span>25%</span><span>50%</span></div>
+                        </div>
+                        <div class="sens-scenario-pick">
+                            <label>Show Scenario:</label>
+                            <select id="sens-scenario" onchange="onSensitivityChange()">
+                                <option value="all">All Scenarios</option>
+                                <option value="Base">Base</option>
+                                <option value="Upturn">Upturn</option>
+                                <option value="Downturn">Downturn</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="sens-chart-area">
+                        <canvas id="chart-sensitivity"></canvas>
+                    </div>
+                </div>
+                <div class="table-wrap" style="margin-top:20px" id="sens-table-wrap"></div>
+            </div>
+        </div>
+
+        <!-- Comparison -->
+        <div class="card" id="comparison-section" style="display:none">
+            <div class="comparison-header">
+                <h2 class="card-title" style="margin:0">Run Comparison</h2>
+                <button class="btn-sm" onclick="clearComparison()">Clear History</button>
+            </div>
+            <div id="comparison-content"></div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-row">
+            <button class="btn-download" id="download-btn" onclick="downloadExcel()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Download Excel
+            </button>
+            <button class="btn-print" onclick="printReport()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                    <rect x="6" y="14" width="12" height="8"/>
+                </svg>
+                Print / PDF
+            </button>
+        </div>
+    </section>
+
+</main>
+
+<!-- ── Footer ──────────────────────────────────────────────────────── -->
+<footer class="footer">
+    <p>ECL Automation Engine &middot; Credit Risk Analytics &middot; IFRS 9 Compliant</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
