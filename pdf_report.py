@@ -202,12 +202,14 @@ class ECLReport(FPDF):
         self.report_date = datetime.now().strftime("%B %d, %Y")
         self.set_auto_page_break(auto=True, margin=22)
         self.set_margins(15, 15, 15)
+        self._in_header_footer = False
 
     # ── Header / Footer ──────────────────────────────────────────────────
 
     def header(self):
-        if self.page_no() <= 1:
+        if self.page_no() <= 1 or self._in_header_footer:
             return
+        self._in_header_footer = True
         self.set_fill_color(*C_NAVY)
         self.rect(0, 0, 210, 10, "F")
         # Thin accent line
@@ -219,10 +221,12 @@ class ECLReport(FPDF):
         self.cell(90, 7, "Expected Credit Loss Report", ln=0)
         self.cell(90, 7, self.report_date, ln=0, align="R")
         self.ln(12)
+        self._in_header_footer = False
 
     def footer(self):
-        if self.page_no() <= 1:
+        if self.page_no() <= 1 or self._in_header_footer:
             return
+        self._in_header_footer = True
         self.set_y(-14)
         self.set_draw_color(*C_LGREY)
         self.line(15, self.get_y(), 195, self.get_y())
@@ -231,6 +235,7 @@ class ECLReport(FPDF):
         self.set_text_color(*C_GREY)
         self.cell(90, 6, f"Page {self.page_no() - 1}  |  {self.company}", ln=0)
         self.cell(90, 6, "Confidential", ln=0, align="R")
+        self._in_header_footer = False
 
     # ── Helpers ──────────────────────────────────────────────────────────
 

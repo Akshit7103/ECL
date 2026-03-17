@@ -1,9 +1,12 @@
 """FastAPI server for ECL Automation."""
 
+import sys
 import os
 import uuid
 import shutil
 import tempfile
+
+sys.setrecursionlimit(3000)
 
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
