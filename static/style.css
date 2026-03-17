@@ -312,7 +312,7 @@ body.dark .scen-btn.active[data-scen="Upturn"]   { background: #22543d; color: #
 body.dark .scen-btn.active[data-scen="Downturn"] { background: #742a2a; color: #feb2b2; }
 
 /* ── Sensitivity ───────────────────────────────────────────────────── */
-.sensitivity-panel { display: grid; grid-template-columns: 300px 1fr; gap: 24px; }
+.sensitivity-panel { display: grid; grid-template-columns: 300px 1fr; gap: 24px; min-height: 400px; }
 .sens-controls {
     background: var(--card-hover); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 24px;
@@ -336,6 +336,7 @@ body.dark .scen-btn.active[data-scen="Downturn"] { background: #742a2a; color: #
 .sens-chart-area {
     background: var(--card-hover); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 20px;
+    height: 400px; min-width: 0; position: relative;
 }
 
 /* ── Comparison ────────────────────────────────────────────────────── */

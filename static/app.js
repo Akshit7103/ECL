@@ -188,6 +188,8 @@ function renderResults() {
     renderPDTable('Base');
     renderPDChart('Base');
     renderSensitivity();
+    renderSurvivalTables('Base');
+    renderPITPD();
     renderComparison();
 }
 
@@ -490,7 +492,7 @@ function renderSensitivity(shockOverride) {
         type: 'line',
         data: { labels: yrs, datasets },
         options: {
-            responsive: true, animation: { duration: 200 },
+            responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
             plugins: { legend: { position: 'top', labels: { font: { size: 11 } } },
                        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y.toFixed(4)}%` } } },
             scales: { y: { title: { display:true, text:'PD (%)' }, beginAtZero:true } }
@@ -576,53 +578,135 @@ function switchTab(tabId) {
 function printReport() { window.print(); }
 function downloadExcel() { if (downloadUrl) window.location.href = downloadUrl; }
 
-/* ── PDF Report Modal & Generation ────────────────────────────────── */
-function openReportModal() {
-    document.getElementById('report-modal').classList.add('active');
-    const status = document.getElementById('report-status');
-    status.style.display = 'none';
-    status.className = 'modal-status';
+/* ── PDF Report Generation ────────────────────────────────────────── */
+
+/* ── Survival Analysis ────────────────────────────────────────────── */
+function renderSurvivalTable(containerId, dataKey, scenario) {
+    const pd = DATA.vasicek_pd;
+    const yrs = pd.years;
+    const dataObj = DATA[dataKey];
+    if (!dataObj) { document.getElementById(containerId).innerHTML = '<p>No data</p>'; return; }
+
+    let allVals = [];
+    DATA.ttc_rho.filter(r=>r.ttc<1).forEach(r => dataObj[scenario][r.grade].forEach(v => allVals.push(v*100)));
+    const maxVal = Math.max(...allVals, 0.1);
+
+    let html = '<table class="data-table"><thead><tr><th>Grade</th><th>TTC</th>';
+    yrs.forEach(y => html += `<th>${y}</th>`);
+    html += '</tr></thead><tbody>';
+    DATA.ttc_rho.forEach(row => {
+        html += `<tr><td>${row.grade}</td><td>${(row.ttc*100).toFixed(2)}%</td>`;
+        dataObj[scenario][row.grade].forEach(v => {
+            const pct = v * 100;
+            html += `<td class="heat-cell" style="background:${heatColor(pct, 0, maxVal)}">${pct.toFixed(2)}%</td>`;
+        });
+        html += '</tr>';
+    });
+    document.getElementById(containerId).innerHTML = html + '</tbody></table>';
 }
 
-function closeReportModal() {
-    document.getElementById('report-modal').classList.remove('active');
+function renderSurvivalTables(scenario) {
+    renderSurvivalTable('surv-pd-table-wrap', 'vasicek_pd', scenario);
+    if (DATA.survival_1) renderSurvivalTable('surv-1-table-wrap', 'survival_1', scenario);
+    if (DATA.cumul_survival) renderSurvivalTable('surv-cumul-table-wrap', 'cumul_survival', scenario);
+}
+
+function selectSurvScenario(scenario) {
+    document.querySelectorAll('.scen-btn-surv').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.scen-btn-surv[data-scen="${scenario}"]`).classList.add('active');
+    renderSurvivalTables(scenario);
+}
+
+/* ── PIT PD ───────────────────────────────────────────────────────── */
+function renderPITPD() {
+    if (!DATA.scen_weights) return;
+
+    // Weights cards
+    const w = DATA.scen_weights;
+    document.getElementById('pit-weights-grid').innerHTML = `
+        <div class="metric-card"><div class="metric-label">Base Weight</div><div class="metric-value">${(w.Base*100).toFixed(0)}%</div></div>
+        <div class="metric-card green"><div class="metric-label">Upturn Weight</div><div class="metric-value">${(w.Upturn*100).toFixed(0)}%</div></div>
+        <div class="metric-card red"><div class="metric-label">Downturn Weight</div><div class="metric-value">${(w.Downturn*100).toFixed(0)}%</div></div>`;
+
+    renderMarginalPDTable('Base');
+    renderPITPDTable();
+    renderPITPDChart();
+}
+
+function renderMarginalPDTable(scenario) {
+    if (!DATA.marginal_pd) return;
+    const yrs = DATA.vasicek_pd.years;
+    const marg = DATA.marginal_pd;
+
+    let html = '<table class="data-table"><thead><tr><th>Grade</th><th>TTC</th>';
+    yrs.forEach(y => html += `<th>${y}</th>`);
+    html += '</tr></thead><tbody>';
+    DATA.ttc_rho.forEach(row => {
+        html += `<tr><td>${row.grade}</td><td>${(row.ttc*100).toFixed(2)}%</td>`;
+        marg[scenario][row.grade].forEach(v => {
+            html += `<td>${(v*100).toFixed(2)}%</td>`;
+        });
+        html += '</tr>';
+    });
+    document.getElementById('marginal-pd-table-wrap').innerHTML = html + '</tbody></table>';
+}
+
+function selectMargScenario(scenario) {
+    document.querySelectorAll('.scen-btn-marg').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.scen-btn-marg[data-scen="${scenario}"]`).classList.add('active');
+    renderMarginalPDTable(scenario);
+}
+
+function renderPITPDTable() {
+    if (!DATA.pit_pd || !DATA.lifetime_pd) return;
+    const yrs = DATA.vasicek_pd.years;
+
+    let html = '<table class="data-table"><thead><tr><th>Grade</th><th>TTC</th>';
+    yrs.forEach(y => html += `<th>${y}</th>`);
+    html += '<th>Lifetime PD</th></tr></thead><tbody>';
+    DATA.ttc_rho.forEach(row => {
+        html += `<tr><td>${row.grade}</td><td>${(row.ttc*100).toFixed(2)}%</td>`;
+        DATA.pit_pd[row.grade].forEach(v => {
+            html += `<td>${(v*100).toFixed(2)}%</td>`;
+        });
+        const ltpd = DATA.lifetime_pd[row.grade];
+        html += `<td style="background:#e2efda;font-weight:700;color:#276749">${(ltpd*100).toFixed(2)}%</td>`;
+        html += '</tr>';
+    });
+    document.getElementById('pit-pd-table-wrap').innerHTML = html + '</tbody></table>';
+}
+
+function renderPITPDChart() {
+    if (!DATA.pit_pd) return;
+    const yrs = DATA.vasicek_pd.years;
+    const colors = ['#2b6cb0','#4299e1','#d69e2e','#e53e3e','#718096'];
+    const grades = DATA.ttc_rho.filter(r=>r.ttc<1).map(r=>r.grade);
+    makeChart('pitpd', 'chart-pitpd', {
+        type: 'line',
+        data: { labels:yrs, datasets: grades.map((g,i)=>({ label:g, data:DATA.pit_pd[g].map(v=>v*100), borderColor:colors[i], fill:false, tension:.3, borderWidth:2.5, pointRadius:4 })) },
+        options: { responsive:true, plugins:{legend:{position:'top'},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y.toFixed(4)}%`}}}, scales:{y:{title:{display:true,text:'PIT PD (%)'},beginAtZero:true}} }
+    });
 }
 
 async function generateReport() {
     if (!DATA) return;
-    const btn = document.getElementById('btn-gen-report');
-    const status = document.getElementById('report-status');
-
-    btn.disabled = true;
-    btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> Generating...';
-    status.style.display = 'block';
-    status.className = 'modal-status loading';
-    status.textContent = 'Building charts and tables... This may take a few seconds.';
-
-    const company = document.getElementById('report-company').value.trim();
-    const prepared_by = document.getElementById('report-author').value.trim();
-
+    const errBox = document.getElementById('error-box');
     try {
+        errBox.style.display = 'none';
         const resp = await fetch('/api/report', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data: DATA, company, prepared_by }),
+            body: JSON.stringify({ data: DATA, company: '', prepared_by: '' }),
         });
         const json = await resp.json();
         if (json.error) {
-            status.className = 'modal-status error';
-            status.textContent = 'Error: ' + json.error;
+            errBox.textContent = 'PDF Error: ' + json.error;
+            errBox.style.display = 'block';
             return;
         }
-        status.className = 'modal-status success';
-        status.textContent = 'Report generated successfully! Downloading...';
-        setTimeout(() => { window.location.href = json.download_url; }, 400);
-        setTimeout(closeReportModal, 2000);
+        window.location.href = json.download_url;
     } catch (err) {
-        status.className = 'modal-status error';
-        status.textContent = 'Request failed: ' + err.message;
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Generate Report';
+        errBox.textContent = 'PDF generation failed: ' + err.message;
+        errBox.style.display = 'block';
     }
 }

@@ -221,6 +221,8 @@ class ECLEngine:
         self.tm_start_year = cfg.get("tm_start_year", 2020)
         self.shock         = cfg.get("shock", 0.10)
         self.hist_cutoff   = cfg.get("hist_cutoff", 2024)
+        self.odr_display_years = cfg.get("odr_display_years", list(range(2020, 2025)))
+        self.scen_weights  = cfg.get("scen_weights", {"Base": 0.50, "Upturn": 0.05, "Downturn": 0.45})
 
         self.weo_years     = list(range(2019, 2028))
         self.extrap_years  = list(range(2028, 2033))
@@ -314,8 +316,11 @@ class ECLEngine:
     # ── Step 4: TTC & Rho ───────────────────────────────────────────────
 
     def _compute_ttc_rho(self):
-        odr_by_grade = {fb: [] for fb in FROM_BUCKETS}
-        for yr in self.year_pairs:
+        ttc_n_years = len(self.odr_display_years)
+        odr_by_grade = {fb: {} for fb in FROM_BUCKETS}
+        for yr in self.odr_display_years:
+            if yr not in self.pairs_by_yr:
+                continue
             mat, nm, _ = self._compute_odr_matrix(yr)
             if nm == 0:
                 continue
@@ -323,12 +328,13 @@ class ECLEngine:
                 row   = mat[fb]
                 total = sum(row.values())
                 if total == 0:
+                    odr_by_grade[fb][yr] = 0.0
                     continue
                 dft = sum(row[d] for d in DEFAULT_TO_B)
-                odr_by_grade[fb].append(dft / total)
+                odr_by_grade[fb][yr] = dft / total
 
         self.ttc = {
-            fb: float(np.mean(odr_by_grade[fb])) if odr_by_grade[fb] else 1.0
+            fb: sum(odr_by_grade[fb].values()) / ttc_n_years
             for fb in FROM_BUCKETS
         }
         self.ttc["90+"] = 1.0
@@ -429,6 +435,60 @@ class ECLEngine:
                 for grade in FROM_BUCKETS
             }
 
+    # ── Step 8: Survival Analysis ────────────────────────────────────────
+
+    def _compute_survival(self):
+        self.surv_1 = {}
+        self.cumul_surv = {}
+        for scen in self.scenarios:
+            self.surv_1[scen] = {}
+            self.cumul_surv[scen] = {}
+            for grade in FROM_BUCKETS:
+                self.surv_1[scen][grade] = {}
+                self.cumul_surv[scen][grade] = {}
+                running = 1.0
+                for yr in self.forecast_yrs:
+                    sp = 1.0 - self.pd_results[scen][grade][yr]
+                    self.surv_1[scen][grade][yr] = sp
+                    running *= sp
+                    self.cumul_surv[scen][grade][yr] = running
+
+    # ── Step 9: PIT PD ──────────────────────────────────────────────────
+
+    def _compute_pit_pd(self):
+        self.marginal_pd = {}
+        for scen in self.scenarios:
+            self.marginal_pd[scen] = {}
+            for grade in FROM_BUCKETS:
+                self.marginal_pd[scen][grade] = {}
+                for i, yr in enumerate(self.forecast_yrs):
+                    if i == 0:
+                        self.marginal_pd[scen][grade][yr] = self.pd_results[scen][grade][yr]
+                    else:
+                        prev_yr = self.forecast_yrs[i - 1]
+                        self.marginal_pd[scen][grade][yr] = (
+                            self.cumul_surv[scen][grade][prev_yr]
+                            - self.cumul_surv[scen][grade][yr]
+                        )
+
+        self.pit_pd_vals = {}
+        for grade in FROM_BUCKETS:
+            self.pit_pd_vals[grade] = {}
+            for yr in self.forecast_yrs:
+                self.pit_pd_vals[grade][yr] = sum(
+                    self.scen_weights[s] * self.marginal_pd[s][grade][yr]
+                    for s in self.scenarios
+                )
+
+        last_yr = self.forecast_yrs[-1]
+        self.lifetime_pd = {
+            grade: 1.0 - sum(
+                self.scen_weights[s] * self.cumul_surv[s][grade][last_yr]
+                for s in self.scenarios
+            )
+            for grade in FROM_BUCKETS
+        }
+
     # ── Excel generation ─────────────────────────────────────────────────
 
     def _generate_excel(self):
@@ -441,6 +501,8 @@ class ECLEngine:
         self._sheet_vasicek(wb)
         self._sheet_pd_comparison(wb)
         self._sheet_inputs(wb)
+        self._sheet_survival(wb)
+        self._sheet_pit_pd(wb)
         wb.save(self.output_path)
 
     def _sheet_tm(self, wb):
@@ -510,114 +572,168 @@ class ECLEngine:
     def _sheet_odr(self, wb):
         ws = wb.create_sheet("ODR")
         ws.sheet_view.showGridLines = False
-        NUM = len(self.year_pairs)
-        ODR_COLS = 12
+
+        # Filter to display years only
+        odr_yrs = [yr for yr in self.year_pairs if yr in self.odr_display_years]
+        num_odr_yrs = len(odr_yrs)
+        to_cols_odr = list(TO_BUCKETS)
+        cols_per_yr = len(to_cols_odr) + 2  # 8 to-buckets + Total + Default = 10
+        sub_labels = to_cols_odr + ["Total", "Defualt"]
+
+        # Row 1: Title
         ws.row_dimensions[1].height = 22
-        sc(ws.cell(1, 1), val="Observed Default Rate (ODR) - Full History",
+        sc(ws.cell(1, 1), val="Observed Default Rate",
            font=FONT_TITLE, align=ALIGN_L)
+        ws.merge_cells(start_row=1, start_column=1,
+                       end_row=1, end_column=1 + num_odr_yrs * cols_per_yr)
         ws.row_dimensions[2].height = 6
 
-        for yi, from_yr in enumerate(self.year_pairs):
-            bc  = yi * ODR_COLS + 1
+        # Row 3: Year-group headers
+        ws.row_dimensions[3].height = 16
+        sc(ws.cell(3, 1), fill=FILL_DARK, border=BORDER)
+
+        for yi, from_yr in enumerate(odr_yrs):
+            bc = 2 + yi * cols_per_yr
             res = self.odr_results[from_yr]
-            mat = res["matrix"]
-            nm  = res["months"]
-            yn  = yi + 1
-            no_data = nm == 0
-            partial = 0 < nm < 12
+            partial = 0 < res["months"] < 12
+            no_data = res["months"] == 0
+
             if no_data:
-                year_label = f"Year {yn}  ({from_yr}->{from_yr+1})  [No active loans]"
-                hdr_fill   = FILL_GREY
-                hdr_font   = Font(name="Arial", bold=True, color="808080", size=9)
+                hdr_fill = FILL_GREY
+                hdr_font = Font(name="Arial", bold=True, color="808080", size=9)
+                lbl = f"Year {yi+1}  ({from_yr}\u2192{from_yr+1})  [No data]"
             elif partial:
-                year_label = f"Year {yn}  ({from_yr}->{from_yr+1})  [{nm} months] *"
-                hdr_fill   = FILL_WARN
-                hdr_font   = Font(name="Arial", bold=True, color="7F4F00", size=9)
+                hdr_fill = FILL_WARN
+                hdr_font = Font(name="Arial", bold=True, color="7F4F00", size=9)
+                lbl = f"Year {yi+1}  ({from_yr}\u2192{from_yr+1})  [{res['months']} months]*"
             else:
-                year_label = f"Year {yn}  ({from_yr}->{from_yr+1})"
                 hdr_fill, hdr_font = FILL_DARK, FONT_HDR
-            ws.row_dimensions[3].height = 15
-            sc(ws.cell(3, bc+1), val=year_label,
+                lbl = f"Year {yi+1}  ({from_yr}\u2192{from_yr+1})"
+
+            sc(ws.cell(3, bc), val=lbl,
                fill=hdr_fill, font=hdr_font, align=ALIGN_C, border=BORDER)
-            ws.merge_cells(start_row=3, start_column=bc+1, end_row=3, end_column=bc+11)
-            ws.row_dimensions[4].height = 15
-            sc(ws.cell(4, bc+1), fill=FILL_MED, border=BORDER)
-            for di, tb in enumerate(TO_BUCKETS + ["Total", "Default"]):
-                sc(ws.cell(4, bc+2+di), val=tb,
+            ws.merge_cells(start_row=3, start_column=bc,
+                           end_row=3, end_column=bc + cols_per_yr - 1)
+
+        # Row 4: Sub-column headers
+        ws.row_dimensions[4].height = 15
+        sc(ws.cell(4, 1), val="From \\ To",
+           fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+
+        for yi in range(num_odr_yrs):
+            bc = 2 + yi * cols_per_yr
+            for di, lbl in enumerate(sub_labels):
+                sc(ws.cell(4, bc + di), val=lbl,
                    fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
-            for ri, fb in enumerate(FROM_BUCKETS + ["Total"]):
-                row_e    = 5 + ri
-                is_total = fb == "Total"
-                ws.row_dimensions[row_e].height = 14
+
+        # Rows 5-10: Data rows
+        for ri, fb in enumerate(FROM_BUCKETS + ["Total"]):
+            row_e = 5 + ri
+            is_total = fb == "Total"
+            ws.row_dimensions[row_e].height = 14
+
+            row_fill = FILL_LIGHT if is_total else (FILL_ALT if ri % 2 == 0 else FILL_WHITE)
+            row_font = FONT_TOTAL if is_total else FONT_BODY
+
+            sc(ws.cell(row_e, 1), val=fb,
+               fill=row_fill,
+               font=Font(name="Arial", bold=True, size=9, color="1F4E79"),
+               align=ALIGN_C, border=BORDER)
+
+            for yi, from_yr in enumerate(odr_yrs):
+                bc = 2 + yi * cols_per_yr
+                res = self.odr_results[from_yr]
+                no_data = res["months"] == 0
+                mat = res["matrix"]
+
                 if no_data:
-                    row_fill, row_font = FILL_GREY, FONT_GREY
-                else:
-                    row_fill = FILL_LIGHT if is_total else (FILL_ALT if ri % 2 == 0 else FILL_WHITE)
-                    row_font = FONT_TOTAL if is_total else FONT_BODY
-                sc(ws.cell(row_e, bc+1), val=fb, fill=row_fill,
-                   font=Font(name="Arial", bold=True, size=9,
-                             color="808080" if no_data else "1F4E79"),
-                   align=ALIGN_C, border=BORDER)
-                if no_data:
-                    for di in range(10):
-                        sc(ws.cell(row_e, bc+2+di), val="N/A",
+                    for di in range(cols_per_yr):
+                        sc(ws.cell(row_e, bc + di), val="N/A",
                            fill=FILL_GREY, font=FONT_GREY, align=ALIGN_C, border=BORDER)
                     continue
-                row_data  = ({tb: sum(mat[b][tb] for b in FROM_BUCKETS) for tb in TO_BUCKETS}
-                             if is_total else mat[fb])
+
+                if is_total:
+                    row_data = {tb: sum(mat[b][tb] for b in FROM_BUCKETS) for tb in to_cols_odr}
+                else:
+                    row_data = {tb: mat[fb][tb] for tb in to_cols_odr}
+
                 total_val = sum(row_data.values())
-                dft_val   = sum(row_data[d] for d in DEFAULT_TO_B) / total_val if total_val else 0.0
-                for di, tk in enumerate(TO_BUCKETS + ["Total", "Default"]):
-                    col_e = bc + 2 + di
+                dft_val = (sum(row_data[d] for d in DEFAULT_TO_B if d in row_data) / total_val
+                           if total_val else 0.0)
+
+                for di, tk in enumerate(to_cols_odr + ["Total", "Default"]):
+                    col_e = bc + di
                     if tk == "Total":
                         v, fmt = total_val, FMT_INT
                     elif tk == "Default":
                         v, fmt = dft_val, FMT_PCT2
                     else:
                         v, fmt = row_data[tk], FMT_INT
-                    sc(ws.cell(row_e, col_e), val=v,
-                       fill=row_fill, font=row_font, align=ALIGN_R, fmt=fmt, border=BORDER)
 
+                    if not is_total and tk in DEFAULT_TO_B:
+                        c_fill = PatternFill("solid", start_color="FCE4D6", end_color="FCE4D6")
+                        c_font = Font(name="Arial", bold=True, color="C00000", size=9)
+                    elif not is_total and tk == "Default":
+                        c_fill = FILL_RED
+                        c_font = Font(name="Arial", bold=True, color="C00000", size=9)
+                    else:
+                        c_fill, c_font = row_fill, row_font
+
+                    sc(ws.cell(row_e, col_e), val=v,
+                       fill=c_fill, font=c_font,
+                       align=ALIGN_R, fmt=fmt, border=BORDER)
+
+        # Spacers
         ws.row_dimensions[11].height = 8
         ws.row_dimensions[12].height = 8
+
+        # Rows 13-14: ODR Summary
         ws.row_dimensions[13].height = 15
-        sc(ws.cell(13, 1), val="Period",
+        sc(ws.cell(13, 1), val="Year",
            fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
-        for yi, from_yr in enumerate(self.year_pairs):
-            sc(ws.cell(13, 2+yi), val=f"{from_yr}->{from_yr+1}",
-               fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+
         ws.row_dimensions[14].height = 15
         sc(ws.cell(14, 1), val="ODR",
            fill=FILL_GREEN, font=FONT_ODR, align=ALIGN_C, border=BORDER)
-        for yi, from_yr in enumerate(self.year_pairs):
-            res     = self.odr_results[from_yr]
+
+        for yi, from_yr in enumerate(odr_yrs):
+            col_e = 2 + yi
+            res = self.odr_results[from_yr]
             no_data = res["months"] == 0
             partial = 0 < res["months"] < 12
-            fill    = FILL_RED if no_data else (FILL_WARN if partial else FILL_GREEN)
+            fill = FILL_RED if no_data else (FILL_WARN if partial else FILL_GREEN)
+
+            sc(ws.cell(13, col_e), val=f"Year {yi+1}",
+               fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+
             if no_data:
-                sc(ws.cell(14, 2+yi), val="N/A",
+                sc(ws.cell(14, col_e), val="N/A",
                    fill=fill, font=FONT_NA, align=ALIGN_C, border=BORDER)
             else:
-                sc(ws.cell(14, 2+yi), val=res["odr"],
+                sc(ws.cell(14, col_e), val=res["odr"],
                    fill=fill, font=FONT_ODR, align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+
+        # Notes
         for row_n, (text, colour, italic) in enumerate([
             ("Notes:", "1F4E79", False),
-            ("  Red (N/A) - No active loans; ODR cannot be computed.", "C00000", True),
-            ("  Amber (*) - Partial year; ODR may be understated.",    "7F4F00", True),
+            ("  Columns 90+, WO, ARC are default states (highlighted red).  "
+             "Amber (*) = Partial year - ODR may be understated.", "7F4F00", True),
+            ("  ODR = Total defaults (90+, WO, ARC) / Total observations across all from-buckets.",
+             "595959", True),
         ], start=15):
             ws.row_dimensions[row_n].height = 12
             sc(ws.cell(row_n, 1), val=text,
                font=Font(name="Arial", size=8, italic=italic, color=colour), align=ALIGN_L)
             ws.merge_cells(start_row=row_n, start_column=1,
-                           end_row=row_n, end_column=1+NUM)
-        col_widths = [2, 10, 8, 7, 7, 7, 6, 6, 8, 7, 10, 10]
-        for yi in range(NUM):
-            bc = yi * ODR_COLS + 1
-            for di, w in enumerate(col_widths):
-                ws.column_dimensions[get_column_letter(bc+di)].width = w
-        ws.column_dimensions["A"].width = 14
-        for yi in range(NUM):
-            ws.column_dimensions[get_column_letter(2+yi)].width = 13
+                           end_row=row_n, end_column=1 + num_odr_yrs * cols_per_yr)
+
+        # Column widths
+        ws.column_dimensions["A"].width = 11
+        sub_col_widths = [6, 7, 7, 7, 7, 6, 6, 8, 8, 9]
+        for yi in range(num_odr_yrs):
+            bc = 2 + yi * cols_per_yr
+            for di, w in enumerate(sub_col_widths):
+                ws.column_dimensions[get_column_letter(bc + di)].width = w
 
     def _sheet_mav(self, wb):
         ws = wb.create_sheet("MAV Summary")
@@ -984,6 +1100,236 @@ class ECLEngine:
         for ci, w in enumerate([9, 14, 10, 12, 12, 12, 10, 12]):
             ws.column_dimensions[get_column_letter(1+ci)].width = w
 
+    def _sheet_survival(self, wb):
+        ws = wb.create_sheet("Survival Analysis")
+        ws.sheet_view.showGridLines = False
+
+        sur_bc = {"Base": 1, "Upturn": 12, "Downturn": 23}
+        sur_ncols = 10  # label + TTC + 8 years
+        n_yrs = len(self.forecast_yrs)
+
+        # Row 1: Title
+        ws.row_dimensions[1].height = 22
+        sc(ws.cell(1, 1), val="Survival Analysis",
+           font=FONT_TITLE, align=ALIGN_L)
+        ws.merge_cells(start_row=1, start_column=1,
+                       end_row=1, end_column=3 * sur_ncols + 2)
+        ws.row_dimensions[2].height = 6
+
+        def _sur_block(top_row, sub_label, data_dict, fmt):
+            for scen in self.scenarios:
+                bc = sur_bc[scen]
+                hdr_fill, hdr_font = FILL_DARK, FONT_HDR
+
+                ws.row_dimensions[top_row].height = 15
+                lbl = scen if not sub_label else f"{scen}   {sub_label}"
+                sc(ws.cell(top_row, bc), val=lbl,
+                   fill=SCEN_HDR_FILL[scen], font=hdr_font, align=ALIGN_C, border=BORDER)
+                ws.merge_cells(start_row=top_row, start_column=bc,
+                               end_row=top_row, end_column=bc + sur_ncols - 1)
+
+                hdr_row = top_row + 1
+                ws.row_dimensions[hdr_row].height = 14
+                sc(ws.cell(hdr_row, bc), val="Grades",
+                   fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+                sc(ws.cell(hdr_row, bc + 1), val="TTC",
+                   fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+                for di, yr in enumerate(self.forecast_yrs):
+                    sc(ws.cell(hdr_row, bc + 2 + di), val=str(yr),
+                       fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+
+                for ri, grade in enumerate(FROM_BUCKETS):
+                    dr = hdr_row + 1 + ri
+                    ws.row_dimensions[dr].height = 14
+                    row_fill = FILL_LIGHT if grade == "90+" else (FILL_ALT if ri % 2 == 0 else FILL_WHITE)
+                    sc(ws.cell(dr, bc), val=grade,
+                       fill=row_fill,
+                       font=Font(name="Arial", bold=True, size=9, color="1F4E79"),
+                       align=ALIGN_C, border=BORDER)
+                    sc(ws.cell(dr, bc + 1), val=self.ttc[grade],
+                       fill=FILL_PARAM, font=FONT_PARAM,
+                       align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+                    for di, yr in enumerate(self.forecast_yrs):
+                        v = data_dict[scen][grade][yr]
+                        sc(ws.cell(dr, bc + 2 + di), val=v,
+                           fill=row_fill, font=FONT_BODY,
+                           align=ALIGN_R, fmt=fmt, border=BORDER)
+
+            # Spacer columns
+            for sp_col in [11, 22]:
+                for r in range(top_row, top_row + 7):
+                    ws.cell(r, sp_col).fill = FILL_WHITE
+
+        # Draw all 3 sub-tables
+        sub_tables = [
+            (3, "", self.pd_results, FMT_PCT2),
+            (11, "(1-p)", self.surv_1, FMT_PCT2),
+            (19, "(1-p)\u2219(1-p)\u2219\u2219\u2219", self.cumul_surv, FMT_PCT2),
+        ]
+
+        for top_row, sub_label, data_src, fmt in sub_tables:
+            if top_row > 3:
+                for sr in range(top_row - 2, top_row):
+                    ws.row_dimensions[sr].height = 6
+            _sur_block(top_row, sub_label, data_src, fmt)
+
+        # Column widths
+        for scen in self.scenarios:
+            bc = sur_bc[scen]
+            ws.column_dimensions[get_column_letter(bc)].width = 9
+            ws.column_dimensions[get_column_letter(bc + 1)].width = 7
+            for di in range(n_yrs):
+                ws.column_dimensions[get_column_letter(bc + 2 + di)].width = 7
+        for sp_col in [11, 22]:
+            ws.column_dimensions[get_column_letter(sp_col)].width = 2
+
+        # Note row
+        note_r = 26
+        ws.row_dimensions[note_r].height = 12
+        sc(ws.cell(note_r, 1),
+           val=("(1-p) = 1 - Vasicek PD  |  "
+                "(1-p)\u00b7(1-p)\u00b7\u00b7\u00b7 = cumulative product of single-period survival probabilities  |  "
+                f"Weights - Base:{self.scen_weights['Base']*100:.0f}%  "
+                f"Upturn:{self.scen_weights['Upturn']*100:.0f}%  "
+                f"Downturn:{self.scen_weights['Downturn']*100:.0f}%"),
+           font=FONT_NOTE, align=ALIGN_L)
+        ws.merge_cells(start_row=note_r, start_column=1,
+                       end_row=note_r, end_column=3 * sur_ncols + 2)
+
+    def _sheet_pit_pd(self, wb):
+        ws = wb.create_sheet("PIT PD")
+        ws.sheet_view.showGridLines = False
+
+        pit_bc = {"Base": 1, "Upturn": 12, "Downturn": 23}
+        pit_ncols = 10
+
+        # Row 1: Title
+        ws.row_dimensions[1].height = 22
+        sc(ws.cell(1, 1), val="Marginal Probability of Default",
+           font=FONT_TITLE, align=ALIGN_L)
+        ws.merge_cells(start_row=1, start_column=1,
+                       end_row=1, end_column=3 * pit_ncols + 3)
+        ws.row_dimensions[2].height = 6
+
+        # Section A: Marginal PD per scenario (rows 3-9)
+        for scen in self.scenarios:
+            bc = pit_bc[scen]
+            ws.row_dimensions[3].height = 15
+            sc(ws.cell(3, bc), val=scen,
+               fill=SCEN_HDR_FILL[scen],
+               font=Font(name="Arial", bold=True, color="FFFFFF", size=9),
+               align=ALIGN_C, border=BORDER)
+            ws.merge_cells(start_row=3, start_column=bc,
+                           end_row=3, end_column=bc + pit_ncols - 1)
+
+            ws.row_dimensions[4].height = 14
+            sc(ws.cell(4, bc), val="Grades",
+               fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+            sc(ws.cell(4, bc + 1), val="TTC",
+               fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+            for di, yr in enumerate(self.forecast_yrs):
+                sc(ws.cell(4, bc + 2 + di), val=str(yr),
+                   fill=FILL_MED, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+
+            for ri, grade in enumerate(FROM_BUCKETS):
+                dr = 5 + ri
+                ws.row_dimensions[dr].height = 14
+                row_fill = FILL_LIGHT if grade == "90+" else (FILL_ALT if ri % 2 == 0 else FILL_WHITE)
+                sc(ws.cell(dr, bc), val=grade,
+                   fill=row_fill,
+                   font=Font(name="Arial", bold=True, size=9, color="1F4E79"),
+                   align=ALIGN_C, border=BORDER)
+                sc(ws.cell(dr, bc + 1), val=self.ttc[grade],
+                   fill=FILL_PARAM, font=FONT_PARAM,
+                   align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+                for di, yr in enumerate(self.forecast_yrs):
+                    v = self.marginal_pd[scen][grade][yr]
+                    sc(ws.cell(dr, bc + 2 + di), val=v,
+                       fill=row_fill, font=FONT_BODY,
+                       align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+
+        # Spacer cols
+        for sp_col in [11, 22]:
+            ws.column_dimensions[get_column_letter(sp_col)].width = 2
+
+        # Section B: Scenario Weights (rows 10-13)
+        ws.row_dimensions[10].height = 8
+        ws.row_dimensions[11].height = 16
+        sc(ws.cell(11, 1), val="Scenario Weights",
+           fill=FILL_DARK, font=FONT_TITLE, align=ALIGN_L)
+        ws.merge_cells(start_row=11, start_column=1, end_row=11, end_column=6)
+
+        ws.row_dimensions[12].height = 14
+        ws.row_dimensions[13].height = 14
+        for ci, scen in enumerate(self.scenarios):
+            sc(ws.cell(12, 1 + ci), val=scen,
+               fill=SCEN_HDR_FILL[scen],
+               font=Font(name="Arial", bold=True, color="FFFFFF", size=9),
+               align=ALIGN_C, border=BORDER)
+            sc(ws.cell(13, 1 + ci), val=self.scen_weights[scen],
+               fill=SCEN_ROW_FILL[scen], font=FONT_PARAM,
+               align=ALIGN_C, fmt="0.00%", border=BORDER)
+
+        # Section C: PIT PD (rows 15-21)
+        ws.row_dimensions[14].height = 8
+        ws.row_dimensions[15].height = 18
+        sc(ws.cell(15, 1), val="Point-In-Time Probability of Default  (PIT PD)",
+           font=FONT_TITLE, align=ALIGN_L)
+        ws.merge_cells(start_row=15, start_column=1,
+                       end_row=15, end_column=3 * pit_ncols + 3)
+
+        ws.row_dimensions[16].height = 14
+        for ci, hdr in enumerate(["Grades", "TTC"] + [str(y) for y in self.forecast_yrs] + ["Lifetime PD"]):
+            sc(ws.cell(16, 1 + ci), val=hdr,
+               fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
+
+        for ri, grade in enumerate(FROM_BUCKETS):
+            dr = 17 + ri
+            ws.row_dimensions[dr].height = 14
+            row_fill = FILL_LIGHT if grade == "90+" else (FILL_ALT if ri % 2 == 0 else FILL_WHITE)
+            sc(ws.cell(dr, 1), val=grade,
+               fill=row_fill,
+               font=Font(name="Arial", bold=True, size=9, color="1F4E79"),
+               align=ALIGN_C, border=BORDER)
+            sc(ws.cell(dr, 2), val=self.ttc[grade],
+               fill=FILL_PARAM, font=FONT_PARAM,
+               align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+            for di, yr in enumerate(self.forecast_yrs):
+                v = self.pit_pd_vals[grade][yr]
+                sc(ws.cell(dr, 3 + di), val=v,
+                   fill=row_fill, font=FONT_BODY,
+                   align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+            sc(ws.cell(dr, 3 + len(self.forecast_yrs)), val=self.lifetime_pd[grade],
+               fill=PatternFill("solid", start_color="E2EFDA", end_color="E2EFDA"),
+               font=Font(name="Arial", bold=True, size=9, color="375623"),
+               align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
+
+        # Note row
+        note_r = 23
+        ws.row_dimensions[22].height = 8
+        ws.row_dimensions[note_r].height = 12
+        sc(ws.cell(note_r, 1),
+           val=("PIT PD = sum(scenario weight * marginal PD)  |  "
+                "Marginal PD t1 = Vasicek PD t1;  "
+                "Marginal PD tn = S(tn-1) - S(tn)  |  "
+                "Lifetime PD = 1 - weighted cumulative survival at terminal year"),
+           font=FONT_NOTE, align=ALIGN_L)
+        ws.merge_cells(start_row=note_r, start_column=1,
+                       end_row=note_r, end_column=3 * pit_ncols + 3)
+
+        # Column widths
+        for scen in self.scenarios:
+            bc = pit_bc[scen]
+            ws.column_dimensions[get_column_letter(bc)].width = 9
+            ws.column_dimensions[get_column_letter(bc + 1)].width = 7
+            for di in range(len(self.forecast_yrs)):
+                ws.column_dimensions[get_column_letter(bc + 2 + di)].width = 7
+        ws.column_dimensions["A"].width = 9
+        ws.column_dimensions["B"].width = 7
+        for di in range(len(self.forecast_yrs)):
+            ws.column_dimensions[get_column_letter(3 + di)].width = 7
+        ws.column_dimensions[get_column_letter(3 + len(self.forecast_yrs))].width = 11
+
     # ── Collect results for API ──────────────────────────────────────────
 
     def _collect_results(self):
@@ -1082,6 +1428,38 @@ class ECLEngine:
             "odr_by_grade":  odr_by_grade,
             "gdp_z_raw":     gdp_z,
             "corr_curve":    corr_curve,
+            # Survival analysis
+            "survival_1": {
+                s: {
+                    grade: [round(self.surv_1[s][grade][yr], 6) for yr in self.forecast_yrs]
+                    for grade in FROM_BUCKETS
+                }
+                for s in self.scenarios
+            },
+            "cumul_survival": {
+                s: {
+                    grade: [round(self.cumul_surv[s][grade][yr], 6) for yr in self.forecast_yrs]
+                    for grade in FROM_BUCKETS
+                }
+                for s in self.scenarios
+            },
+            # Marginal PD
+            "marginal_pd": {
+                s: {
+                    grade: [round(self.marginal_pd[s][grade][yr], 6) for yr in self.forecast_yrs]
+                    for grade in FROM_BUCKETS
+                }
+                for s in self.scenarios
+            },
+            # PIT PD
+            "pit_pd": {
+                grade: [round(self.pit_pd_vals[grade][yr], 6) for yr in self.forecast_yrs]
+                for grade in FROM_BUCKETS
+            },
+            "lifetime_pd": {
+                grade: round(self.lifetime_pd[grade], 6) for grade in FROM_BUCKETS
+            },
+            "scen_weights": self.scen_weights,
             "config_used": {
                 "shock":         self.shock,
                 "tm_start_year": self.tm_start_year,
@@ -1101,5 +1479,7 @@ class ECLEngine:
         self._compute_mav()
         self._compute_scenarios()
         self._compute_vasicek()
+        self._compute_survival()
+        self._compute_pit_pd()
         self._generate_excel()
         return self._collect_results()

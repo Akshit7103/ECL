@@ -151,6 +151,8 @@
                 <button class="tab" data-tab="macro" onclick="switchTab('macro')">Macro &amp; Z-Factors</button>
                 <button class="tab" data-tab="pd" onclick="switchTab('pd')">PD Results</button>
                 <button class="tab" data-tab="sensitivity" onclick="switchTab('sensitivity')">Sensitivity</button>
+                <button class="tab" data-tab="survival" onclick="switchTab('survival')">Survival</button>
+                <button class="tab" data-tab="pitpd" onclick="switchTab('pitpd')">PIT PD</button>
             </div>
 
             <!-- Tab: Overview -->
@@ -262,6 +264,46 @@
                 </div>
                 <div class="table-wrap" style="margin-top:20px" id="sens-table-wrap"></div>
             </div>
+
+            <!-- Tab: Survival -->
+            <div class="tab-content" id="tab-survival">
+                <h3>Survival Analysis</h3>
+                <p style="font-size:13px;color:var(--text-sec);margin-bottom:16px">Single-period survival (1-p) and cumulative survival probabilities per scenario.</p>
+                <div class="scenario-selector">
+                    <label>Scenario:</label>
+                    <button class="scen-btn scen-btn-surv active" data-scen="Base" onclick="selectSurvScenario('Base')">Base</button>
+                    <button class="scen-btn scen-btn-surv" data-scen="Upturn" onclick="selectSurvScenario('Upturn')">Upturn</button>
+                    <button class="scen-btn scen-btn-surv" data-scen="Downturn" onclick="selectSurvScenario('Downturn')">Downturn</button>
+                </div>
+                <h4 style="margin:16px 0 8px;color:var(--navy)">Vasicek PD</h4>
+                <div class="table-wrap" id="surv-pd-table-wrap"></div>
+                <h4 style="margin:16px 0 8px;color:var(--navy)">Single-Period Survival (1-p)</h4>
+                <div class="table-wrap" id="surv-1-table-wrap"></div>
+                <h4 style="margin:16px 0 8px;color:var(--navy)">Cumulative Survival</h4>
+                <div class="table-wrap" id="surv-cumul-table-wrap"></div>
+            </div>
+
+            <!-- Tab: PIT PD -->
+            <div class="tab-content" id="tab-pitpd">
+                <h3>Point-In-Time PD (Scenario Weighted)</h3>
+                <div class="metrics-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px" id="pit-weights-grid"></div>
+                <h4 style="margin:16px 0 8px;color:var(--navy)">Marginal PD by Scenario</h4>
+                <div class="scenario-selector">
+                    <label>Scenario:</label>
+                    <button class="scen-btn scen-btn-marg active" data-scen="Base" onclick="selectMargScenario('Base')">Base</button>
+                    <button class="scen-btn scen-btn-marg" data-scen="Upturn" onclick="selectMargScenario('Upturn')">Upturn</button>
+                    <button class="scen-btn scen-btn-marg" data-scen="Downturn" onclick="selectMargScenario('Downturn')">Downturn</button>
+                </div>
+                <div class="table-wrap" id="marginal-pd-table-wrap"></div>
+                <h4 style="margin:24px 0 8px;color:var(--navy)">PIT PD (Weighted Average) &amp; Lifetime PD</h4>
+                <div class="table-wrap" id="pit-pd-table-wrap"></div>
+                <div class="chart-row" style="margin-top:24px">
+                    <div class="chart-box full">
+                        <h3>PIT PD Forecast</h3>
+                        <canvas id="chart-pitpd"></canvas>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Comparison -->
@@ -282,7 +324,7 @@
                 </svg>
                 Download Excel
             </button>
-            <button class="btn-pdf" onclick="openReportModal()">
+            <button class="btn-pdf" onclick="generateReport()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                     <polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/>
@@ -300,38 +342,6 @@
     </section>
 
 </main>
-
-<!-- ── PDF Report Modal ────────────────────────────────────────────── -->
-<div class="modal-overlay" id="report-modal">
-    <div class="modal-card">
-        <div class="modal-header">
-            <h2>Generate PDF Report</h2>
-            <button class="modal-close" onclick="closeReportModal()">&times;</button>
-        </div>
-        <p class="modal-desc">Create a professional, board-ready ECL report with charts, tables, and regulatory commentary.</p>
-        <div class="modal-form">
-            <div class="modal-field">
-                <label for="report-company">Company / Division Name</label>
-                <input type="text" id="report-company" placeholder="e.g. Credit Risk Division">
-            </div>
-            <div class="modal-field">
-                <label for="report-author">Prepared By</label>
-                <input type="text" id="report-author" placeholder="e.g. Risk Analytics Team">
-            </div>
-        </div>
-        <div class="modal-actions">
-            <button class="btn-modal-cancel" onclick="closeReportModal()">Cancel</button>
-            <button class="btn-modal-generate" id="btn-gen-report" onclick="generateReport()">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                </svg>
-                Generate Report
-            </button>
-        </div>
-        <div class="modal-status" id="report-status" style="display:none"></div>
-    </div>
-</div>
 
 <!-- ── Footer ──────────────────────────────────────────────────────── -->
 <footer class="footer">

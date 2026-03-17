@@ -169,6 +169,25 @@ def _fig_pd_base(data):
     return fig
 
 
+def _fig_pit_pd(data):
+    if "pit_pd" not in data:
+        return None
+    pit = data["pit_pd"]
+    yrs = data["vasicek_pd"]["years"]
+    grades = [r for r in data["ttc_rho"] if r["ttc"] < 1]
+    colors = [BLUE, SKY, AMBER, RED]
+    fig, ax = plt.subplots(figsize=(7, 3))
+    for gi, g in enumerate(grades):
+        vals = [v * 100 for v in pit[g["grade"]]]
+        ax.plot(yrs, vals, color=colors[gi], linewidth=2, marker="o", markersize=4, label=g["grade"])
+    ax.set_ylabel("PIT PD (%)")
+    ax.set_title("Point-In-Time PD Forecast (Scenario Weighted)", fontweight="bold", color=NAVY)
+    ax.legend(loc="best", framealpha=0.9)
+    plt.xticks(rotation=30, ha="right")
+    fig.tight_layout()
+    return fig
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PDF REPORT CLASS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -575,6 +594,60 @@ class ECLReport(FPDF):
         self._subsection("Base Scenario PD Forecast")
         self._embed(_fig_pd_base(self.data), w=155)
 
+    def build_survival_analysis(self):
+        if "survival_1" not in self.data or "pit_pd" not in self.data:
+            return
+        self.add_page()
+        self._section("Survival & PIT PD Analysis")
+
+        sw = self.data.get("scen_weights", {})
+        self._body(
+            f"Survival probabilities are computed from Vasicek PD: S(t) = 1 - PD(t), "
+            f"with cumulative survival as the running product. Marginal PD at time t equals "
+            f"the drop in cumulative survival: S(t-1) - S(t). "
+            f"Point-in-time PD is the scenario-weighted marginal PD with weights: "
+            f"Base={sw.get('Base',0.5)*100:.0f}%, Upturn={sw.get('Upturn',0.05)*100:.0f}%, "
+            f"Downturn={sw.get('Downturn',0.45)*100:.0f}%."
+        )
+
+        # Lifetime PD table
+        if self.data.get("lifetime_pd"):
+            self._subsection("Lifetime PD by Grade")
+            headers = ["Grade", "TTC PD", "Lifetime PD"]
+            rows = []
+            for r in self.data["ttc_rho"]:
+                if r["ttc"] < 1:
+                    ltpd = self.data["lifetime_pd"].get(r["grade"], 0)
+                    rows.append([
+                        r["grade"],
+                        f'{r["ttc"]*100:.4f}%',
+                        f'{ltpd*100:.2f}%',
+                    ])
+            self._table(headers, rows, col_widths=[20, 25, 25])
+
+        # PIT PD chart
+        fig = _fig_pit_pd(self.data)
+        if fig:
+            self._subsection("PIT PD Forecast")
+            self._embed(fig, w=155)
+
+        # PIT PD table
+        if self.data.get("pit_pd"):
+            self._subsection("PIT PD Values")
+            yrs = self.data["vasicek_pd"]["years"]
+            headers = ["Grade"] + yrs + ["Lifetime"]
+            rows = []
+            for r in self.data["ttc_rho"]:
+                g = r["grade"]
+                row = [g]
+                for v in self.data["pit_pd"].get(g, []):
+                    row.append(f'{v*100:.2f}%')
+                ltpd = self.data.get("lifetime_pd", {}).get(g, 0)
+                row.append(f'{ltpd*100:.2f}%')
+                rows.append(row)
+            widths = [14] + [14] * len(yrs) + [16]
+            self._table(headers, rows, col_widths=widths, highlight_last=False)
+
     def build_parameters(self):
         self.add_page()
         self._section("Model Parameters & Methodology")
@@ -647,6 +720,7 @@ class ECLReport(FPDF):
         self.build_ttc_correlation()
         self.build_macro_analysis()
         self.build_pd_results()
+        self.build_survival_analysis()
         self.build_parameters()
 
 
