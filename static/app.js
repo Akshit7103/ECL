@@ -362,8 +362,11 @@ function renderODRGradeHeatmap() {
 
 /* ── MAV Table ─────────────────────────────────────────────────────── */
 function renderMAVTable() {
-    let html = '<table class="data-table"><thead><tr><th>Macroeconomic Variable</th><th>Code</th><th>LTM</th><th>SD</th></tr></thead><tbody>';
-    DATA.mav_params.forEach(r => { html += `<tr><td>${r.mev}</td><td>${r.code}</td><td>${r.ltm.toFixed(2)}</td><td>${r.sd.toFixed(2)}</td></tr>`; });
+    let html = '<table class="data-table"><thead><tr><th>Macroeconomic Variable</th><th>Code</th><th>LTM</th><th>SD</th><th>CV</th></tr></thead><tbody>';
+    DATA.mav_params.forEach(r => {
+        const cv = r.cv != null ? (r.cv * 100).toFixed(2) + '%' : 'N/A';
+        html += `<tr><td>${r.mev}</td><td>${r.code}</td><td>${r.ltm.toFixed(2)}</td><td>${r.sd.toFixed(2)}</td><td>${cv}</td></tr>`;
+    });
     document.getElementById('mav-table-wrap').innerHTML = html + '</tbody></table>';
 }
 
@@ -658,19 +661,17 @@ function selectMargScenario(scenario) {
 }
 
 function renderPITPDTable() {
-    if (!DATA.pit_pd || !DATA.lifetime_pd) return;
+    if (!DATA.pit_pd) return;
     const yrs = DATA.vasicek_pd.years;
 
     let html = '<table class="data-table"><thead><tr><th>Grade</th><th>TTC</th>';
     yrs.forEach(y => html += `<th>${y}</th>`);
-    html += '<th>Lifetime PD</th></tr></thead><tbody>';
+    html += '</tr></thead><tbody>';
     DATA.ttc_rho.forEach(row => {
         html += `<tr><td>${row.grade}</td><td>${(row.ttc*100).toFixed(2)}%</td>`;
         DATA.pit_pd[row.grade].forEach(v => {
             html += `<td>${(v*100).toFixed(2)}%</td>`;
         });
-        const ltpd = DATA.lifetime_pd[row.grade];
-        html += `<td style="background:#e2efda;font-weight:700;color:#276749">${(ltpd*100).toFixed(2)}%</td>`;
         html += '</tr>';
     });
     document.getElementById('pit-pd-table-wrap').innerHTML = html + '</tbody></table>';

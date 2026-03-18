@@ -743,47 +743,53 @@ class ECLEngine:
            val="MAV Index - Z-Factors Summary (All MEVs, India, IMF WEO Apr 2025)",
            font=FONT_TITLE, align=ALIGN_L)
         ws.merge_cells(start_row=1, start_column=1, end_row=1,
-                       end_column=4+len(self.display_years))
+                       end_column=5+len(self.display_years))
         ws.row_dimensions[2].height = 8
         ws.row_dimensions[3].height = 16
-        for ci, lbl in enumerate(["MEV", "LTM", "SD"]):
+        for ci, lbl in enumerate(["MEV", "LTM", "SD", "CV"]):
             sc(ws.cell(3, 1+ci), val=lbl,
                fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
         for ci, yr in enumerate(self.display_years):
             hf = (FILL_DARK if yr <= self.hist_cutoff else
                   FILL_MED  if yr <= 2027 else
                   PatternFill("solid", start_color="7F6000", end_color="7F6000"))
-            sc(ws.cell(3, 4+ci), val=str(yr),
+            sc(ws.cell(3, 5+ci), val=str(yr),
                fill=hf, font=FONT_HDR, align=ALIGN_C, border=BORDER)
         for ri, code in enumerate(SERIES_ORDER):
             row_e    = 4 + ri
             row_fill = FILL_ALT if ri % 2 == 0 else FILL_WHITE
             ws.row_dimensions[row_e].height = 15
+            ltm_val = self.mav_params[code]["LTM"]
+            sd_val  = self.mav_params[code]["SD"]
+            cv_val  = abs(sd_val / ltm_val) if ltm_val != 0 else None
             sc(ws.cell(row_e, 1), val=SERIES_MAP[code],
                fill=row_fill, font=FONT_LABEL, align=ALIGN_L, border=BORDER)
-            sc(ws.cell(row_e, 2), val=self.mav_params[code]["LTM"],
+            sc(ws.cell(row_e, 2), val=ltm_val,
                fill=FILL_GOLD, font=FONT_PARAM, align=ALIGN_R, fmt=FMT_NUM2, border=BORDER)
-            sc(ws.cell(row_e, 3), val=self.mav_params[code]["SD"],
+            sc(ws.cell(row_e, 3), val=sd_val,
                fill=FILL_GOLD, font=FONT_PARAM, align=ALIGN_R, fmt=FMT_NUM2, border=BORDER)
+            sc(ws.cell(row_e, 4), val=cv_val,
+               fill=FILL_GOLD, font=FONT_PARAM, align=ALIGN_R, fmt="0.00%", border=BORDER)
             for ci, yr in enumerate(self.display_years):
                 z = self.z_factors[code][yr]
-                sc(ws.cell(row_e, 4+ci), val=z,
+                sc(ws.cell(row_e, 5+ci), val=z,
                    fill=year_fill(yr, self.hist_cutoff),
                    font=FONT_Z_NEG if z < 0 else FONT_Z_POS,
                    align=ALIGN_R, fmt=FMT_NUM2, border=BORDER)
         ws.row_dimensions[9].height = 8
         sc(ws.cell(10, 1),
-           val=(f"Z = (Value - LTM) / SD  |  Window {self.calib_years[0]}-{self.calib_years[-1]} "
+           val=(f"Z = (Value - LTM) / SD  |  CV = |SD / LTM|  |  Window {self.calib_years[0]}-{self.calib_years[-1]} "
                 f"(n={len(self.calib_years)}, pop. std)  |  "
                 "Blue=Actual  Green=IMF Forecast  Amber=Extrapolated"),
            font=FONT_NOTE, align=ALIGN_L)
         ws.merge_cells(start_row=10, start_column=1, end_row=10,
-                       end_column=4+len(self.display_years))
+                       end_column=5+len(self.display_years))
         ws.column_dimensions["A"].width = 34
         ws.column_dimensions["B"].width = 8
         ws.column_dimensions["C"].width = 8
+        ws.column_dimensions["D"].width = 9
         for ci in range(len(self.display_years)):
-            ws.column_dimensions[get_column_letter(4+ci)].width = 6.5
+            ws.column_dimensions[get_column_letter(5+ci)].width = 6.5
 
     def _sheets_mev_detail(self, wb):
         for mi, code in enumerate(SERIES_ORDER):
@@ -959,7 +965,7 @@ class ECLEngine:
             ws.merge_cells(start_row=base_r, start_column=1,
                            end_row=base_r, end_column=4+len(self.forecast_yrs))
             ws.row_dimensions[base_r+1].height = 15
-            for ci, hdr in enumerate(["Grades", "TTC", "Asset Correlation"]):
+            for ci, hdr in enumerate(["Grades", "TTC", "Asset Correlation (\u03c1)"]):
                 sc(ws.cell(base_r+1, 1+ci), val=hdr,
                    fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
             for ci, yr in enumerate(self.forecast_yrs):
@@ -1279,7 +1285,7 @@ class ECLEngine:
                        end_row=15, end_column=3 * pit_ncols + 3)
 
         ws.row_dimensions[16].height = 14
-        for ci, hdr in enumerate(["Grades", "TTC"] + [str(y) for y in self.forecast_yrs] + ["Lifetime PD"]):
+        for ci, hdr in enumerate(["Grades", "TTC"] + [str(y) for y in self.forecast_yrs]):
             sc(ws.cell(16, 1 + ci), val=hdr,
                fill=FILL_DARK, font=FONT_HDR, align=ALIGN_C, border=BORDER)
 
@@ -1299,20 +1305,15 @@ class ECLEngine:
                 sc(ws.cell(dr, 3 + di), val=v,
                    fill=row_fill, font=FONT_BODY,
                    align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
-            sc(ws.cell(dr, 3 + len(self.forecast_yrs)), val=self.lifetime_pd[grade],
-               fill=PatternFill("solid", start_color="E2EFDA", end_color="E2EFDA"),
-               font=Font(name="Arial", bold=True, size=9, color="375623"),
-               align=ALIGN_R, fmt=FMT_PCT2, border=BORDER)
 
         # Note row
         note_r = 23
         ws.row_dimensions[22].height = 8
         ws.row_dimensions[note_r].height = 12
         sc(ws.cell(note_r, 1),
-           val=("PIT PD = sum(scenario weight * marginal PD)  |  "
-                "Marginal PD t1 = Vasicek PD t1;  "
-                "Marginal PD tn = S(tn-1) - S(tn)  |  "
-                "Lifetime PD = 1 - weighted cumulative survival at terminal year"),
+           val=("PIT PD = \u03a3(scenario weight \u00d7 marginal PD)  |  "
+                "Marginal PD t\u2081 = Vasicek PD t\u2081;  "
+                "Marginal PD t\u2099 = S(t\u2099\u208b\u2081) \u2212 S(t\u2099)"),
            font=FONT_NOTE, align=ALIGN_L)
         ws.merge_cells(start_row=note_r, start_column=1,
                        end_row=note_r, end_column=3 * pit_ncols + 3)
@@ -1328,7 +1329,6 @@ class ECLEngine:
         ws.column_dimensions["B"].width = 7
         for di in range(len(self.forecast_yrs)):
             ws.column_dimensions[get_column_letter(3 + di)].width = 7
-        ws.column_dimensions[get_column_letter(3 + len(self.forecast_yrs))].width = 11
 
     # ── Collect results for API ──────────────────────────────────────────
 
@@ -1353,7 +1353,9 @@ class ECLEngine:
 
         mav_list = [
             {"mev": SERIES_MAP[c], "code": c,
-             "ltm": self.mav_params[c]["LTM"], "sd": self.mav_params[c]["SD"]}
+             "ltm": self.mav_params[c]["LTM"], "sd": self.mav_params[c]["SD"],
+             "cv": round(abs(self.mav_params[c]["SD"] / self.mav_params[c]["LTM"]), 4)
+                   if self.mav_params[c]["LTM"] != 0 else None}
             for c in SERIES_ORDER
         ]
 
